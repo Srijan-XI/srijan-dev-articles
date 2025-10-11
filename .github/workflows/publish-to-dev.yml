@@ -1,0 +1,54 @@
+name: Publish Articles to DEV.to
+
+on:
+  push:
+    paths:
+      - "articles/**/*.md"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Dependencies
+        run: pip install requests
+
+      - name: Publish to DEV.to
+        env:
+          DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
+        run: |
+          import os, glob, json, requests
+          
+          files = glob.glob("articles/*.md")
+          for f in files:
+              with open(f, "r", encoding="utf-8") as file:
+                  content = file.read()
+
+              title_line = content.splitlines()[0]
+              title = title_line.strip("# ").strip() if title_line.startswith("#") else os.path.basename(f).replace(".md", "")
+
+              data = {
+                  "article": {
+                      "title": title,
+                      "published": True,
+                      "body_markdown": content,
+                      "tags": ["technology", "cybersecurity", "ai"],
+                      "series": "Automation Blog"
+                  }
+              }
+
+              headers = {
+                  "api-key": os.environ["DEVTO_API_KEY"],
+                  "Content-Type": "application/json"
+              }
+
+              res = requests.post("https://dev.to/api/articles", headers=headers, data=json.dumps(data))
+              print(f"Uploaded {f}: {res.status_code} - {res.text[:200]}")
