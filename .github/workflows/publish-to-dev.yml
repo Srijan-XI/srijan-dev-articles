@@ -1,30 +1,8 @@
-name: Smart Publish to DEV.to
-
-on:
-  push:
-    paths:
-      - "articles/**/*.md"
-
-jobs:
-  publish:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
-      - name: Install Dependencies
-        run: pip install requests pyyaml
-
       - name: Publish Only New Files
         env:
           DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
         run: |
+          python <<'PYCODE'
           import os, subprocess, yaml, json, requests
 
           # Get newly added markdown files from the last commit
@@ -83,3 +61,4 @@ jobs:
               res = requests.post("https://dev.to/api/articles", headers=headers, data=json.dumps(payload))
               print(f"Status: {res.status_code}")
               print(res.text[:300])
+          PYCODE
