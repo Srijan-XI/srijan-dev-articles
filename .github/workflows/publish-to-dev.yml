@@ -1,9 +1,145 @@
+name: Publish new articles to DEV.to
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '**/*.md'
+      - '.github/workflows/publish-to-dev.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so we can diff across the push range
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install pyyaml requests
+
       - name: Publish Only New Files
+        env:
+          DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
+          DIFF_BEFORE: ${{ github.event.before }}
+          DIFF_AFTER: ${{ github.sha }}
+        run: |
+          python <<'PYCODE'
+          import os, subprocess, yaml, json, requests, sys
+
+          print("Current working directory:", os.getcwd())
+
+          before = os.environ.get("DIFF_BEFORE") or ""
+          after = os.environ.get("DIFF_AFTER") or "HEAD"
+
+          # Build diff range robustly
+          if before and set(before) != {"0"}:
+              diff_args = [before, after]
+          else:
+              diff_args = ["HEAD^", "HEAD"]
+
+          # Get newly added markdown files in the push range
+          try:
+              result = subprocess.run(
+                  ["git", "diff", "--name-status", *diff_args],
+                  capture_output=True, text=True, check=False
+              )
+          except Exception as e:
+              print("Failed to run git diff:", e)
+              sys.exit(1)
+
+          new_files = []
+          for line in result.stdout.splitlines():
+              # format: 'A\tpath/to/file'
+              if line.startswith("A\t"):
+                  path = line.split("\t", 1)[1]
+                  if path.lower().endswith(".md"):
+                      new_files.append(path)
+
+          if not new_files:
+              print("No new markdown files added in this push.")
+              sys.exit(0)
+
+          print("New articles detected:", new_files)
+
+          for f in new_files:
+              try:
+                  with open(f, "r", encoding="utf-8") as file:
+                      content = file.read()
+              except Exception as e:
+                  print(f"Warning: Could not read {f}: {e}")
+                  continue
+
+              # Parse frontmatter (YAML between --- markers)
+              frontmatter = {}
+              content_body = content
+              if content.startswith("---"):
+                  parts = content.split("---", 2)
+                  if len(parts) >= 3:
+                      try:
+                          frontmatter = yaml.safe_load(parts[1]) or {}
+                          content_body = parts[2].strip()
+                      except Exception as e:
+                          print(f"Warning: Failed to parse frontmatter in {f}: {e}")
+
+              title = frontmatter.get("title") or os.path.basename(f).replace(".md", "").replace("-", " ").title()
+              tags = frontmatter.get("tags", ["technology"])
+              if isinstance(tags, str):
+                  # Allow comma or space separated tags
+                  if "," in tags:
+                      tags = [t.strip() for t in tags.split(",") if t.strip()]
+                  else:
+                      tags = [t.strip() for t in tags.split() if t.strip()]
+              # dev.to allows up to 4 tags
+              tags = tags[:4]
+              series = frontmatter.get("series")
+              published = frontmatter.get("published", True)
+
+              payload = {
+                  "article": {
+                      "title": title,
+                      "published": bool(published),
+                      "body_markdown": content_body,
+                      "tags": tags,
+                  }
+              }
+              if series:
+                  payload["article"]["series"] = series
+
+              headers = {
+                  "api-key": os.environ["DEVTO_API_KEY"],
+                  "Content-Type": "application/json"
+              }
+
+              print(f"Uploading {f} → DEV.to...")
+              res = requests.post("https://dev.to/api/articles", headers=headers, data=json.dumps(payload))
+              print(f"Status: {res.status_code}")
+              print(res.text[:500])
+              if not res.ok:
+                  print(f"Failed to upload {f}: {res.status_code}")
+                  print(res.text)
+                  sys.exit(1)
+          PYCODE
+            - name: Install dependencies
+                run: pip install pyyaml requests
+            - name: Publish Only New Files
         env:
           DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
         run: |
           python <<'PYCODE'
           import os, subprocess, yaml, json, requests
+
+          print("Current working directory:", os.getcwd())
 
           # Get newly added markdown files from the last commit
           result = subprocess.run(
@@ -32,7 +168,8 @@
                   try:
                       frontmatter = yaml.safe_load(parts[1]) or {}
                       content_body = parts[2].strip()
-                  except Exception:
+                  except Exception as e:
+                      print(f"Warning: Failed to parse frontmatter in {f}: {e}")
                       content_body = content
               else:
                   content_body = content
@@ -61,4 +198,8 @@
               res = requests.post("https://dev.to/api/articles", headers=headers, data=json.dumps(payload))
               print(f"Status: {res.status_code}")
               print(res.text[:300])
+              if not res.ok:
+                  print(f"Failed to upload {f}: {res.status_code}")
+                  print(res.text)
+                  exit(1)
           PYCODE
