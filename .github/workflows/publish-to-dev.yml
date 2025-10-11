@@ -1,4 +1,4 @@
-name: Publish Articles to DEV.to
+name: Smart Publish to DEV.to
 
 on:
   push:
@@ -19,29 +19,58 @@ jobs:
           python-version: "3.x"
 
       - name: Install Dependencies
-        run: pip install requests
+        run: pip install requests pyyaml
 
-      - name: Publish to DEV.to
+      - name: Publish Only New Files
         env:
           DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
         run: |
-          import os, glob, json, requests
-          
-          files = glob.glob("articles/*.md")
-          for f in files:
+          import os, subprocess, yaml, json, requests
+
+          # Get newly added markdown files from the last commit
+          result = subprocess.run(
+              ["git", "diff", "--name-status", "HEAD^", "HEAD"],
+              capture_output=True, text=True
+          )
+          new_files = [
+              line.split("\t")[1] for line in result.stdout.splitlines()
+              if line.startswith("A") and line.endswith(".md")
+          ]
+
+          if not new_files:
+              print("No new markdown files added.")
+              exit(0)
+
+          print("New articles detected:", new_files)
+
+          for f in new_files:
               with open(f, "r", encoding="utf-8") as file:
                   content = file.read()
 
-              title_line = content.splitlines()[0]
-              title = title_line.strip("# ").strip() if title_line.startswith("#") else os.path.basename(f).replace(".md", "")
+              # Parse frontmatter (YAML between --- markers)
+              frontmatter = {}
+              if content.startswith("---"):
+                  parts = content.split("---", 2)
+                  try:
+                      frontmatter = yaml.safe_load(parts[1]) or {}
+                      content_body = parts[2].strip()
+                  except Exception:
+                      content_body = content
+              else:
+                  content_body = content
 
-              data = {
+              title = frontmatter.get("title") or os.path.basename(f).replace(".md", "").replace("-", " ").title()
+              tags = frontmatter.get("tags", ["technology"])
+              series = frontmatter.get("series")
+              published = frontmatter.get("published", True)
+
+              payload = {
                   "article": {
                       "title": title,
-                      "published": True,
-                      "body_markdown": content,
-                      "tags": ["technology", "cybersecurity", "ai"],
-                      "series": "Automation Blog"
+                      "published": published,
+                      "body_markdown": content_body,
+                      "tags": tags,
+                      "series": series
                   }
               }
 
@@ -50,5 +79,7 @@ jobs:
                   "Content-Type": "application/json"
               }
 
-              res = requests.post("https://dev.to/api/articles", headers=headers, data=json.dumps(data))
-              print(f"Uploaded {f}: {res.status_code} - {res.text[:200]}")
+              print(f"Uploading {f} → DEV.to...")
+              res = requests.post("https://dev.to/api/articles", headers=headers, data=json.dumps(payload))
+              print(f"Status: {res.status_code}")
+              print(res.text[:300])
